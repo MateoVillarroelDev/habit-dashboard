@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from "react";
-import { Leaf, Flame, Plus, X, Trash2, Loader2 } from "lucide-react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
+import { Leaf, Flame, Plus, X, Trash2, Loader2, Pencil, Download, Upload } from "lucide-react";
 
 const PALETTE = [
   { name: "moss", hex: "#7FB069" },
@@ -49,6 +49,19 @@ const calcStreak = (completions) => {
   return streak;
 };
 
+const calcLongestStreak = (completions) => {
+  const dates = Object.keys(completions).sort();
+  if (dates.length === 0) return 0;
+  let longest = 1;
+  let current = 1;
+  for (let i = 1; i < dates.length; i++) {
+    const diffDays = Math.round((new Date(dates[i]) - new Date(dates[i - 1])) / 86400000);
+    current = diffDays === 1 ? current + 1 : 1;
+    longest = Math.max(longest, current);
+  }
+  return longest;
+};
+
 const uid = () => Math.random().toString(36).slice(2, 10);
 
 const DAY_WINDOW = 30;
@@ -61,6 +74,10 @@ export default function HabitDashboard() {
   const [name, setName] = useState("");
   const [color, setColor] = useState(PALETTE[0].hex);
   const [now, setNow] = useState(new Date());
+  const [editingId, setEditingId] = useState(null);
+  const [editName, setEditName] = useState("");
+  const [editColor, setEditColor] = useState(PALETTE[0].hex);
+  const fileInputRef = useRef(null);
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 60000);
@@ -119,8 +136,54 @@ export default function HabitDashboard() {
     updateHabits(next);
   };
 
-  const removeHabit = (habitId) => {
+  const removeHabit = (habitId, habitName) => {
+    if (!window.confirm(`Delete "${habitName}"? This removes its entire history.`)) return;
     updateHabits(habits.filter((h) => h.id !== habitId));
+  };
+
+  const startEdit = (h) => {
+    setEditingId(h.id);
+    setEditName(h.name);
+    setEditColor(h.color);
+  };
+
+  const cancelEdit = () => setEditingId(null);
+
+  const saveEdit = () => {
+    const trimmed = editName.trim();
+    if (!trimmed) return;
+    updateHabits(
+      habits.map((h) => (h.id === editingId ? { ...h, name: trimmed, color: editColor } : h))
+    );
+    setEditingId(null);
+  };
+
+  const exportData = () => {
+    const blob = new Blob([JSON.stringify(habits, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `habits-${fmt(new Date())}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const importData = (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        if (!Array.isArray(parsed)) throw new Error("invalid shape");
+        if (habits.length > 0 && !window.confirm("Replace current habits with the imported file?")) return;
+        updateHabits(parsed);
+      } catch (err) {
+        window.alert("Couldn't read that file — make sure it's a habits export.");
+      }
+    };
+    reader.readAsText(file);
   };
 
   const days = lastNDates(DAY_WINDOW);
@@ -182,7 +245,34 @@ export default function HabitDashboard() {
               What's growing today
             </h1>
           </div>
-          <Leaf size={28} strokeWidth={1.5} style={{ color: "#7FB069", flexShrink: 0 }} />
+          <div className="flex items-center gap-3 flex-shrink-0">
+            <button
+              onClick={exportData}
+              className="dot-btn flex items-center gap-1.5 font-mono text-xs px-2.5 py-1.5 rounded-full"
+              style={{ color: "#8A9285", border: "1px solid rgba(237,239,234,0.14)" }}
+              title="Export habits as JSON"
+            >
+              <Download size={13} />
+              export
+            </button>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="dot-btn flex items-center gap-1.5 font-mono text-xs px-2.5 py-1.5 rounded-full"
+              style={{ color: "#8A9285", border: "1px solid rgba(237,239,234,0.14)" }}
+              title="Import habits from JSON"
+            >
+              <Upload size={13} />
+              import
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="application/json"
+              onChange={importData}
+              style={{ display: "none" }}
+            />
+            <Leaf size={28} strokeWidth={1.5} style={{ color: "#7FB069", flexShrink: 0 }} />
+          </div>
         </header>
 
         {!storageOk && (
@@ -220,6 +310,10 @@ export default function HabitDashboard() {
               {habits.map((h) => {
                 const streak = calcStreak(h.completions);
                 const doneToday = !!h.completions[todayStr];
+                const longest = calcLongestStreak(h.completions);
+                const last30 = days.filter((d) => h.completions[fmt(d)]).length;
+                const pct = Math.round((last30 / DAY_WINDOW) * 100);
+                const isEditing = editingId === h.id;
                 return (
                   <div
                     key={h.id}
@@ -229,41 +323,101 @@ export default function HabitDashboard() {
                       border: "1px solid rgba(237,239,234,0.08)",
                     }}
                   >
-                    <div className="flex items-center justify-between gap-3 mb-3">
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <span
-                          className="inline-block rounded-full flex-shrink-0"
-                          style={{ width: 9, height: 9, background: h.color }}
+                    {isEditing ? (
+                      <div className="mb-3 pop">
+                        <input
+                          autoFocus
+                          value={editName}
+                          onChange={(e) => setEditName(e.target.value)}
+                          onKeyDown={(e) => e.key === "Enter" && saveEdit()}
+                          className="w-full bg-transparent outline-none font-display text-lg mb-3"
+                          style={{ color: "#EDEFEA", borderBottom: "1px solid rgba(237,239,234,0.14)", paddingBottom: 8 }}
                         />
-                        <h3 className="font-display text-lg truncate" style={{ color: "#EDEFEA" }}>
-                          {h.name}
-                        </h3>
-                      </div>
-                      <div className="flex items-center gap-3 flex-shrink-0">
-                        <div className="flex items-center gap-1 font-mono text-sm" style={{ color: streak > 0 ? "#E8B961" : "#8A9285" }}>
-                          <Flame size={14} strokeWidth={2} />
-                          {streak}
+                        <div className="flex items-center justify-between">
+                          <div className="flex gap-2">
+                            {PALETTE.map((p) => (
+                              <button
+                                key={p.hex}
+                                onClick={() => setEditColor(p.hex)}
+                                className="dot-btn rounded-full"
+                                aria-label={p.name}
+                                style={{
+                                  width: 18,
+                                  height: 18,
+                                  background: p.hex,
+                                  border: editColor === p.hex ? "2px solid #EDEFEA" : "2px solid transparent",
+                                }}
+                              />
+                            ))}
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={cancelEdit}
+                              className="dot-btn px-3 py-1.5 text-sm rounded-full"
+                              style={{ color: "#8A9285" }}
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              onClick={saveEdit}
+                              className="dot-btn px-4 py-1.5 text-sm rounded-full font-medium"
+                              style={{ background: "#7FB069", color: "#10140F" }}
+                            >
+                              Save
+                            </button>
+                          </div>
                         </div>
-                        <button
-                          onClick={() => toggleDay(h.id, todayStr)}
-                          className="dot-btn text-xs font-mono px-3 py-1.5 rounded-full transition-colors"
-                          style={{
-                            background: doneToday ? h.color : "transparent",
-                            border: `1px solid ${doneToday ? h.color : "rgba(237,239,234,0.2)"}`,
-                            color: doneToday ? "#10140F" : "#EDEFEA",
-                          }}
-                        >
-                          {doneToday ? "done today" : "mark today"}
-                        </button>
-                        <button
-                          onClick={() => removeHabit(h.id)}
-                          className="dot-btn opacity-40 hover:opacity-90 transition-opacity"
-                          aria-label={`Delete ${h.name}`}
-                        >
-                          <Trash2 size={14} />
-                        </button>
                       </div>
-                    </div>
+                    ) : (
+                      <div className="flex items-center justify-between gap-3 mb-1">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span
+                            className="inline-block rounded-full flex-shrink-0"
+                            style={{ width: 9, height: 9, background: h.color }}
+                          />
+                          <h3 className="font-display text-lg truncate" style={{ color: "#EDEFEA" }}>
+                            {h.name}
+                          </h3>
+                        </div>
+                        <div className="flex items-center gap-3 flex-shrink-0">
+                          <div className="flex items-center gap-1 font-mono text-sm" style={{ color: streak > 0 ? "#E8B961" : "#8A9285" }}>
+                            <Flame size={14} strokeWidth={2} />
+                            {streak}
+                          </div>
+                          <button
+                            onClick={() => toggleDay(h.id, todayStr)}
+                            className="dot-btn text-xs font-mono px-3 py-1.5 rounded-full transition-colors"
+                            style={{
+                              background: doneToday ? h.color : "transparent",
+                              border: `1px solid ${doneToday ? h.color : "rgba(237,239,234,0.2)"}`,
+                              color: doneToday ? "#10140F" : "#EDEFEA",
+                            }}
+                          >
+                            {doneToday ? "done today" : "mark today"}
+                          </button>
+                          <button
+                            onClick={() => startEdit(h)}
+                            className="dot-btn opacity-40 hover:opacity-90 transition-opacity"
+                            aria-label={`Edit ${h.name}`}
+                          >
+                            <Pencil size={14} />
+                          </button>
+                          <button
+                            onClick={() => removeHabit(h.id, h.name)}
+                            className="dot-btn opacity-40 hover:opacity-90 transition-opacity"
+                            aria-label={`Delete ${h.name}`}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {!isEditing && (
+                      <p className="font-mono text-xs mb-3" style={{ color: "#8A9285" }}>
+                        {pct}% last 30d · best streak {longest}
+                      </p>
+                    )}
 
                     {/* vine + dots */}
                     <div className="relative pt-1">
