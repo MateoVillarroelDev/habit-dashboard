@@ -11,6 +11,9 @@
     "url": "git+https://github.com/MateoVillarroelDev/habit-dashboard.git"
   },
   "homepage": "https://mateovillarroeldev.github.io/habit-dashboard/",
+  "engines": {
+    "node": ">=20.19"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
